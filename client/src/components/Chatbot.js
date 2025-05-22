@@ -3,15 +3,64 @@ import '@chatscope/chat-ui-kit-styles/dist/default/styles.min.css';
 import { MainContainer, ChatContainer, MessageList, Message, MessageInput, Avatar, TypingIndicator } from "@chatscope/chat-ui-kit-react";
 import axios from 'axios';
 import '../styles/chatbot-custom.css';
+import useViewportHeight from './useViewportHeight';
 
 const Chatbot = () => {
   const [messages, setMessages] = useState([]);
   const [isTyping, setIsTyping] = useState(false);
+  // 컴포넌트 상태에 세션 ID 추가
+  const [sessionId, setSessionId] = useState(`user-${Date.now()}`);
+  const [sessionToken, setSessionToken] = useState(localStorage.getItem('sessionToken') || '');
+  const [userName, setUserName] = useState(localStorage.getItem('userName') || '');
+
+  useViewportHeight();
 
   // 시작 Event 설정 - Dialog 상 설정 필요
   useEffect(() => {
+    // 세션 ID가 없는 경우 새로 생성
+    if (!sessionId) {
+      const newSessionId = 'user-' + Date.now();
+      setSessionId(newSessionId);
+      localStorage.setItem('sessionId', newSessionId);
+    }
+
     eventQuery('Welcome');
   }, []);
+
+  // 세션 정보를 저장하는 함수
+  const saveSessionInfo = (result) => {
+    if (result.outputContexts) {
+      // 세션 정보 컨텍스트 찾기
+      const sessionContext = result.outputContexts.find(
+        context => context.name.includes('session-info')
+      );
+      
+      if (sessionContext && sessionContext.parameters) {
+        // 세션 정보 저장
+        if (sessionContext.parameters.sessionId) {
+          setSessionId(sessionContext.parameters.sessionId);
+          localStorage.setItem('sessionId', sessionContext.parameters.sessionId);
+        }
+        
+        if (sessionContext.parameters.sessionToken) {
+          setSessionToken(sessionContext.parameters.sessionToken);
+          localStorage.setItem('sessionToken', sessionContext.parameters.sessionToken);
+        }
+        
+        // 사용자 이름 저장
+        if (result.parameters && result.parameters.person) {
+          const person = result.parameters.person;
+          const name = typeof person === 'string' ? person : 
+                      (person[0] && person[0].name) ? person[0].name : '';
+          
+          if (name) {
+            setUserName(name);
+            localStorage.setItem('userName', name);
+          }
+        }
+      }
+    }
+  };
 
   const textQuery = async (text) => {
     const userMessage = {
@@ -26,8 +75,16 @@ const Chatbot = () => {
     try {
       const response = await axios.post(
         process.env.REACT_APP_DIALOGFLOW_ENDPOINT + '/textQuery',
-        { text }
+        { 
+          text,
+          sessionId: sessionId,
+          userName: userName,
+          sessionToken: sessionToken
+        }
       );
+      // 세션 정보 저장
+      saveSessionInfo(response.data);
+
       const botMessage = {
         message: response.data.fulfillmentText,
         sender: "bot",
@@ -36,25 +93,38 @@ const Chatbot = () => {
       setMessages([...newMessages, botMessage]);
       setIsTyping(false);
     } catch (error) {
+      console.error('Dialogflow 호출 오류:', error);
       setIsTyping(false);
     }
   };
 
+  // 이벤트 쿼리 함수 수정
   const eventQuery = async (event) => {
     setIsTyping(true);
+    
     try {
+      console.log(`이벤트 요청: ${event}, 세션: ${sessionId}`);
+      
       const response = await axios.post(
         process.env.REACT_APP_DIALOGFLOW_ENDPOINT + '/eventQuery',
-        { event }
+        { 
+          event,
+          sessionId,  // 항상 동일한 세션 ID 사용
+          userName,  // 사용자 이름 추가
+          sessionToken  // 세션 토큰 추가
+        }
       );
+      
       const botMessage = {
         message: response.data.fulfillmentText,
         sender: "bot",
         direction: "incoming"
       };
+      
       setMessages([...messages, botMessage]);
       setIsTyping(false);
     } catch (error) {
+      console.error('이벤트 쿼리 오류:', error);
       setIsTyping(false);
     }
   };

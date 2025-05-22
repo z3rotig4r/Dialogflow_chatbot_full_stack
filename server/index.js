@@ -3,7 +3,10 @@ const cors = require("cors");
 const app = express();
 
 // 미들웨어
-app.use(cors());
+app.use(cors({
+  origin: 'https://dev.z3rotig4r.com',
+  credentials: true
+}));
 app.use(express.json());
 
 // DialogFlow 라우터
