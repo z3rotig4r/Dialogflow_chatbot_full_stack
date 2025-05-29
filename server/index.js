@@ -5,6 +5,8 @@ const app = express();
 // 미들웨어
 app.use(cors({
   origin: 'https://dev.z3rotig4r.com',
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
 }));
 app.use(express.json());

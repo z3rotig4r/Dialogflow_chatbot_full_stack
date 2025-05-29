@@ -8,127 +8,114 @@ import useViewportHeight from './useViewportHeight';
 const Chatbot = () => {
   const [messages, setMessages] = useState([]);
   const [isTyping, setIsTyping] = useState(false);
-  // 컴포넌트 상태에 세션 ID 추가
-  const [sessionId, setSessionId] = useState(`user-${Date.now()}`);
-  const [sessionToken, setSessionToken] = useState(localStorage.getItem('sessionToken') || '');
-  const [userName, setUserName] = useState(localStorage.getItem('userName') || '');
+  // 세션 ID는 페이지 로드 시 한 번만 생성하고 유지
+  const [sessionId] = useState(() => {
+    // 저장된 세션 ID가 있으면 사용하고, 없으면 새로 생성
+    const savedSessionId = localStorage.getItem('dialogflowSessionId');
+    return savedSessionId || `user-${Date.now()}`;
+  });
 
   useViewportHeight();
 
-  // 시작 Event 설정 - Dialog 상 설정 필요
+  // 컴포넌트 마운트 시 세션 ID를 로컬 스토리지에 저장하고 Welcome 이벤트 호출
   useEffect(() => {
-    // 세션 ID가 없는 경우 새로 생성
-    if (!sessionId) {
-      const newSessionId = 'user-' + Date.now();
-      setSessionId(newSessionId);
-      localStorage.setItem('sessionId', newSessionId);
-    }
-
+    localStorage.setItem('dialogflowSessionId', sessionId);
+    console.log(`세션 ID 설정: ${sessionId}`);
     eventQuery('Welcome');
-  }, []);
+  }, [sessionId]);
 
-  // 세션 정보를 저장하는 함수
-  const saveSessionInfo = (result) => {
-    if (result.outputContexts) {
-      // 세션 정보 컨텍스트 찾기
-      const sessionContext = result.outputContexts.find(
-        context => context.name.includes('session-info')
-      );
-      
-      if (sessionContext && sessionContext.parameters) {
-        // 세션 정보 저장
-        if (sessionContext.parameters.sessionId) {
-          setSessionId(sessionContext.parameters.sessionId);
-          localStorage.setItem('sessionId', sessionContext.parameters.sessionId);
-        }
-        
-        if (sessionContext.parameters.sessionToken) {
-          setSessionToken(sessionContext.parameters.sessionToken);
-          localStorage.setItem('sessionToken', sessionContext.parameters.sessionToken);
-        }
-        
-        // 사용자 이름 저장
-        if (result.parameters && result.parameters.person) {
-          const person = result.parameters.person;
-          const name = typeof person === 'string' ? person : 
-                      (person[0] && person[0].name) ? person[0].name : '';
-          
-          if (name) {
-            setUserName(name);
-            localStorage.setItem('userName', name);
-          }
-        }
-      }
-    }
-  };
-
+  // 텍스트 쿼리 함수
   const textQuery = async (text) => {
+    // 사용자 메시지 추가
     const userMessage = {
       message: text,
       sender: "user",
       direction: "outgoing"
     };
+    
     const newMessages = [...messages, userMessage];
     setMessages(newMessages);
     setIsTyping(true);
     
     try {
+      console.log(`텍스트 쿼리 요청: "${text}", 세션: ${sessionId}`);
+      
+      // Dialogflow 요청
       const response = await axios.post(
         process.env.REACT_APP_DIALOGFLOW_ENDPOINT + '/textQuery',
         { 
           text,
-          sessionId: sessionId,
-          userName: userName,
-          sessionToken: sessionToken
+          sessionId
         }
       );
-      // 세션 정보 저장
-      saveSessionInfo(response.data);
-
+      
+      // 봇 응답 추가
       const botMessage = {
         message: response.data.fulfillmentText,
         sender: "bot",
         direction: "incoming"
       };
+      
       setMessages([...newMessages, botMessage]);
-      setIsTyping(false);
     } catch (error) {
-      console.error('Dialogflow 호출 오류:', error);
+      console.error('Dialogflow 텍스트 쿼리 오류:', error);
+      
+      // 오류 메시지 표시
+      const errorMessage = {
+        message: "죄송합니다, 오류가 발생했습니다. 다시 시도해주세요.",
+        sender: "bot",
+        direction: "incoming"
+      };
+      
+      setMessages([...newMessages, errorMessage]);
+    } finally {
       setIsTyping(false);
     }
   };
 
-  // 이벤트 쿼리 함수 수정
+  // 이벤트 쿼리 함수
   const eventQuery = async (event) => {
     setIsTyping(true);
     
     try {
-      console.log(`이벤트 요청: ${event}, 세션: ${sessionId}`);
+      console.log(`이벤트 요청: "${event}", 세션: ${sessionId}`);
       
+      // Dialogflow 요청
       const response = await axios.post(
         process.env.REACT_APP_DIALOGFLOW_ENDPOINT + '/eventQuery',
         { 
           event,
-          sessionId,  // 항상 동일한 세션 ID 사용
-          userName,  // 사용자 이름 추가
-          sessionToken  // 세션 토큰 추가
+          sessionId
         }
       );
       
-      const botMessage = {
-        message: response.data.fulfillmentText,
+      if (response.data.fulfillmentText) {
+        // 봇 응답 추가
+        const botMessage = {
+          message: response.data.fulfillmentText,
+          sender: "bot",
+          direction: "incoming"
+        };
+        
+        setMessages(messages => [...messages, botMessage]);
+      }
+    } catch (error) {
+      console.error('Dialogflow 이벤트 쿼리 오류:', error);
+      
+      // 오류 메시지 표시
+      const errorMessage = {
+        message: "죄송합니다, 오류가 발생했습니다. 다시 시도해주세요.",
         sender: "bot",
         direction: "incoming"
       };
       
-      setMessages([...messages, botMessage]);
-      setIsTyping(false);
-    } catch (error) {
-      console.error('이벤트 쿼리 오류:', error);
+      setMessages(messages => [...messages, errorMessage]);
+    } finally {
       setIsTyping(false);
     }
   };
-
+  
+  // 메시지 전송 핸들러
   const handleSend = (message) => {
     textQuery(message);
   };

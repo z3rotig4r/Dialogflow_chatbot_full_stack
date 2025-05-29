@@ -14,168 +14,81 @@ const sessionPath = sessionClient.sessionPath(
 // 사용자 정보를 저장할 객체
 const userSessions = {};
 
-function createOrUpdateSession(sessionId) {
+function getSessionData(sessionId) {
   if (!userSessions[sessionId]) {
+    // 새 세션 생성
     userSessions[sessionId] = {
       'no-input': 0,
       'no-match': 0,
       createdAt: new Date().toISOString(),
-      lastActivity: new Date().getTime(),
-      sessionToken: crypto.randomBytes(16).toString('hex')
+      lastActivity: new Date().getTime()
     };
     console.log(`새 세션 생성: ${sessionId}`);
   } else {
+    // 세션 활동 시간 갱신
     userSessions[sessionId].lastActivity = new Date().getTime();
   }
+  
   return userSessions[sessionId];
 }
 
-// 세션 인증 미들웨어 추가
-const authenticateSession = (req, res, next) => {
-  const sessionId = req.body.sessionId || req.params.sessionId || '';
-  const userName = req.body.userName || '';
-  const sessionToken = req.body.sessionToken || '';
-
-  // Welcome 이벤트는 항상 허용
-  if (req.body.event === 'Welcome') {
-    return next();
-  }
-  
-  // 세션이 존재하는지 확인
-  if (!userSessions[sessionId]) {
-    createOrUpdateSession(sessionId);
-    return next();
-  }
-
-  // 토큰 검증 (설정된 경우)
-  if (userSessions[sessionId].sessionToken && 
-      sessionToken && 
-      userSessions[sessionId].sessionToken !== sessionToken) {
-    return res.status(403).json({ error: '세션 접근 권한이 없습니다.' });
-  }
-  
-  // 사용자 이름 검증 (둘 다 설정된 경우만)
-  if (userSessions[sessionId].person && 
-      userName && 
-      Array.isArray(userSessions[sessionId].person) && 
-      userSessions[sessionId].person.length > 0 &&
-      userSessions[sessionId].person[0].name !== userName) {
-    return res.status(403).json({ error: '사용자 정보가 일치하지 않습니다.' });
-  }
-  
-  next();
-};
-
-// 텍스트 쿼리 처리 - 수정
-router.post('/textQuery', authenticateSession, async (req, res) => {
-  const sessionId = req.body.sessionId || 'react-chatbot-session';
-  
-  // 통합 함수 사용
-  const sessionData = createOrUpdateSession(sessionId);
-  
-  const request = {
-    session: sessionClient.sessionPath(config.googleProjectID, sessionId),
-    queryInput: {
-      text: {
-        text: req.body.text,
-        languageCode: config.dialogFlowSessionLanguageCode
-      }
-    }
-  };
-
+router.post('/textQuery', async (req, res) => {
   try {
-    const responses = await sessionClient.detectIntent(request);
-    console.log('DialogFlow 응답:', responses);
-    const result = responses[0].queryResult;
+    const { text, sessionId } = req.body;
+    const currentSessionId = sessionId || `user-${Date.now()}`;
     
-    // 응답에 세션 정보 컨텍스트 추가
-    if (!result.outputContexts) {
-      result.outputContexts = [];
-    }
+    console.log(`텍스트 쿼리: "${text}", 세션: ${currentSessionId}`);
     
-    // 세션 정보 컨텍스트 설정
-    const sessionInfoContext = {
-      name: `${sessionClient.sessionPath(config.googleProjectID, sessionId)}/contexts/session-info`,
-      lifespanCount: 99,
-      parameters: {
-        sessionId: sessionId,
-        sessionToken: sessionData.sessionToken
-      }
-    };
-    
-    // 컨텍스트 업데이트 또는 추가
-    const existingContextIndex = result.outputContexts.findIndex(
-      context => context.name.endsWith('session-info')
-    );
-    
-    if (existingContextIndex !== -1) {
-      result.outputContexts[existingContextIndex] = sessionInfoContext;
-    } else {
-      result.outputContexts.push(sessionInfoContext);
-    }
-    
-    res.send(result);
-  } catch (error) {
-    console.error('DialogFlow 오류:', error);
-    res.status(500).send({ error: error.message });
-  }
-});
-
-// 이벤트 쿼리 처리 - 수정
-router.post('/eventQuery', authenticateSession, async (req, res) => {
-  try {
-    const sessionId = req.body.sessionId || `user-${Date.now()}`;
-    const eventName = req.body.event || '';
-    
-    console.log(`이벤트 요청 처리: ${eventName}, 세션: ${sessionId}`);
-    
-    // 통합 함수 사용
-    const sessionData = createOrUpdateSession(sessionId);
-
-    // DialogFlow 요청 구성 및 호출
+    // Dialogflow 요청 구성
     const request = {
-      session: sessionClient.sessionPath(config.googleProjectID, sessionId),
+      session: sessionClient.sessionPath(config.googleProjectID, currentSessionId),
       queryInput: {
-        event: {
-          name: eventName,
+        text: {
+          text: text,
           languageCode: config.dialogFlowSessionLanguageCode
         }
       }
     };
-
+    
+    // Dialogflow 호출
     const responses = await sessionClient.detectIntent(request);
     const result = responses[0].queryResult;
     
-    // 응답에 세션 정보 컨텍스트 추가
-    if (!result.outputContexts) {
-      result.outputContexts = [];
-    }
+    console.log(`Dialogflow 응답: "${result.fulfillmentText}"`);
+    res.send(result);
+  } catch (error) {
+    console.error('텍스트 쿼리 오류:', error);
+    res.status(500).send({ error: error.message });
+  }
+});
+
+// 이벤트 쿼리 처리
+router.post('/eventQuery', async (req, res) => {
+  try {
+    const { event, sessionId } = req.body;
+    const currentSessionId = sessionId || `user-${Date.now()}`;
     
-    // 세션 정보 컨텍스트 설정
-    const sessionInfoContext = {
-      name: `${sessionClient.sessionPath(config.googleProjectID, sessionId)}/contexts/session-info`,
-      lifespanCount: 99,
-      parameters: {
-        sessionId: sessionId,
-        sessionToken: sessionData.sessionToken
+    console.log(`이벤트 요청: "${event}", 세션: ${currentSessionId}`);
+    
+    // Dialogflow 요청 구성
+    const request = {
+      session: sessionClient.sessionPath(config.googleProjectID, currentSessionId),
+      queryInput: {
+        event: {
+          name: event,
+          languageCode: config.dialogFlowSessionLanguageCode
+        }
       }
     };
     
-    // 컨텍스트 업데이트 또는 추가
-    const existingContextIndex = result.outputContexts.findIndex(
-      context => context.name.endsWith('session-info')
-    );
+    // Dialogflow 호출
+    const responses = await sessionClient.detectIntent(request);
+    const result = responses[0].queryResult;
     
-    if (existingContextIndex !== -1) {
-      result.outputContexts[existingContextIndex] = sessionInfoContext;
-    } else {
-      result.outputContexts.push(sessionInfoContext);
-    }
-    
-    console.log(`이벤트 ${eventName} 처리 완료`);
+    console.log(`이벤트 "${event}" 처리 완료`);
     res.send(result);
   } catch (error) {
-    console.error('DialogFlow 오류:', error);
+    console.error('이벤트 쿼리 오류:', error);
     res.status(500).send({ error: error.message });
   }
 });
@@ -188,23 +101,18 @@ router.post('/webhook', (req, res) => {
 
     // 세션 ID 추출
     const session = req.body.session || '';
-    const sessionId = session.split('/').pop() || 'react-chatbot-session';
+    const sessionId = session.split('/').pop() || `webhook-${Date.now()}`;
 
-    // 통합 함수 사용
-    const sessionData = createOrUpdateSession(sessionId);
-
-    // 웹훅에서 사용할 세션 정보에 세션 ID 추가
-    agent.context.set('session-info', 99, { 
-      sessionId: sessionId,
-      sessionToken: sessionData.sessionToken
-    });
-
-    // 컨텍스트에서 파라미터 추출 및 세션 데이터에 저장
+    console.log(`Webhook 요청: 세션 ${sessionId}`);
+    
+    // 세션 데이터 가져오기/업데이트
+    const sessionData = getSessionData(sessionId);
+    
+    // 파라미터 추출 및 저장 함수
     const extractAndSaveParams = (agent) => {
-      // 기존 코드 유지
       const params = agent.parameters || {};
       
-      // 파라미터 값 중 .original 필드 제거
+      // .original 필드 제거
       Object.keys(params).forEach(key => {
         if (key.endsWith('.original')) {
           delete params[key];
@@ -212,24 +120,15 @@ router.post('/webhook', (req, res) => {
       });
       
       // person 파라미터 특별 처리
-      if (params.person !== undefined) {
-        // 빈 문자열이거나 null이면 기존 값 유지
-        if (params.person === '' || params.person === null) {
-          delete params.person;  // 덮어쓰지 않도록 제거
-        } 
-        // 유효한 값이면 적절히 병합
-        else if (typeof params.person === 'object') {
-          // 객체 형태로 유지
-        } else if (typeof params.person === 'string' && params.person) {
-          // 문자열이면 객체로 변환
+      if (params.person) {
+        if (typeof params.person === 'string' && params.person) {
           params.person = [{ name: params.person }];
         }
       }
       
-      // 나머지 파라미터는 정상 병합
-      userSessions[sessionId] = { ...userSessions[sessionId], ...params };
-      
-      console.log(`세션 ${sessionId}의 현재 데이터:`, userSessions[sessionId]);
+      // 세션 데이터에 파라미터 병합
+      userSessions[sessionId] = { ...sessionData, ...params };
+      console.log(`세션 ${sessionId} 데이터 업데이트:`, userSessions[sessionId]);
     };
     
     //인트로
@@ -489,13 +388,13 @@ router.post('/webhook', (req, res) => {
   }
 });
 
-// 현재 저장된 세션 데이터 조회 API (디버깅용)
+// 세션 정보 조회 API (디버깅용)
 router.get('/sessions', (req, res) => {
   res.json(userSessions);
 });
 
-// 특정 세션 데이터 조회 API (디버깅용)
-router.get('/sessions/:sessionId', authenticateSession, (req, res) => {
+// 특정 세션 조회 API (디버깅용)
+router.get('/sessions/:sessionId', (req, res) => {
   const sessionId = req.params.sessionId;
   if (userSessions[sessionId]) {
     res.json(userSessions[sessionId]);
@@ -504,14 +403,13 @@ router.get('/sessions/:sessionId', authenticateSession, (req, res) => {
   }
 });
 
-// 세션 데이터 초기화 API (디버깅용)
-router.post('/sessions/reset', authenticateSession, (req, res) => {
+// 세션 초기화 API (디버깅용)
+router.post('/sessions/reset', (req, res) => {
   const sessionId = req.body.sessionId;
   if (sessionId) {
     delete userSessions[sessionId];
     res.json({ message: `세션 ${sessionId} 데이터가 초기화되었습니다.` });
   } else {
-    // 모든 세션 초기화
     Object.keys(userSessions).forEach(key => delete userSessions[key]);
     res.json({ message: '모든 세션 데이터가 초기화되었습니다.' });
   }
